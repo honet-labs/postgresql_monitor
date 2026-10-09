@@ -24,7 +24,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "1.1.3"
+VERSION = "1.1.7"
 BASE_DIR = Path(__file__).resolve().parent
 BUILTIN_FILE = BASE_DIR / "pg_queries_builtin.json"
 STRING_TYPES = {"generic_data_string", "async_string"}
@@ -130,6 +130,33 @@ def replace_macros(text, cfg):
     for old, new in replacements.items():
         value = value.replace(old, str(new))
     return value
+
+
+def diagnostic(exc, password=""):
+    """Avoid exposing database credentials in logs or Discovery Summary."""
+    msg = str(exc)
+    if password and len(str(password)) >= 3:
+        msg = msg.replace(str(password), "[REDACTED]")
+    return msg[:900]
+
+
+def error_advice(message):
+    text = str(message).lower()
+    if 'psycopg2' in text and ('not installed' in text or 'no module' in text):
+        return 'Install psycopg2 for the Python interpreter running Pandora Discovery.'
+    if 'no pg_hba.conf entry' in text:
+        return 'Allow the Pandora Discovery source IP and monitoring role in pg_hba.conf; check SSL mode.'
+    if any(x in text for x in ('name or service not known','getaddrinfo','could not translate host name')):
+        return 'Check PostgreSQL Host/IP and DNS resolution on the Pandora Discovery server.'
+    if 'password authentication failed' in text:
+        return 'Check PostgreSQL monitoring role and password.'
+    if 'connection refused' in text:
+        return 'Check PostgreSQL service, listen_addresses, port 5432, and firewall.'
+    if 'timeout' in text or 'timed out' in text:
+        return 'Check routing/firewall and configure connection or statement timeout.'
+    if 'permission denied' in text:
+        return 'Grant the required read-only permissions or monitoring views to the PostgreSQL role.'
+    return 'Inspect the SQL module, database grants, connection parameters and collector log.'
 
 
 def select_only(sql):
@@ -345,16 +372,35 @@ def module_xml(name, value, datatype="generic_data", unit="", group="", descript
     return "\n".join(parts)
 
 
-def write_agent_xml(agent, group, address, modules):
+def format_product_identity(full_banner, server_version):
+    """Version label for Pandora inventory, without guessed patch numbers."""
+    banner=' '.join(str(full_banner or '').split())
+    version=str(server_version or '').strip()
+    # Keep clearly identified third-party distributions rather than calling
+    # them Community PostgreSQL.
+    vendor_signatures=('edb postgres', 'enterprisedb', 'postgres pro',
+                       'yugabyte', 'greenplum', 'cockroach', 'aurora postgresql')
+    if any(vendor in banner.lower() for vendor in vendor_signatures):
+        return banner.split(' on ',1)[0][:128]
+    match=re.search(r'\bPostgreSQL\s+(\d+(?:\.\d+)*(?:-[A-Za-z0-9.]+)?)',banner,flags=re.I)
+    if match:
+        return f'PostgreSQL {match.group(1)} (Community Edition)'[:128]
+    # No trustworthy product name: preserve only returned facts.
+    return (banner.split(' on ',1)[0] or ('PostgreSQL '+version).strip())[:128]
+
+
+def write_agent_xml(agent, group, address, modules, database_version=""):
+    """Set Pandora agent Version to the monitored PostgreSQL server version."""
     ts = datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-    return (
-        f"<agent_data agent_name='{xml_escape(agent)}' timestamp='{ts}' "
-        f"group='{xml_escape(group)}' os_name='PostgreSQL' os_version='-' "
-        f"alias='{xml_escape(agent)}' address='{xml_escape(address)}' "
-        f"agent_version='postgresql_disco.{VERSION}'>\n"
-        + "\n".join(modules)
-        + "\n</agent_data>\n"
+    attrs = (
+        f"agent_name='{xml_escape(agent)}' timestamp='{ts}' "
+        f"group='{xml_escape(group)}' os_name='PostgreSQL' "
+        f"alias='{xml_escape(agent)}' address='{xml_escape(address)}'"
     )
+    version = str(database_version or "").strip()[:128]
+    if version:
+        attrs += f" os_version='{xml_escape(version)}' version='{xml_escape(version)}'"
+    return f"<agent_data {attrs}>\n" + "\n".join(modules) + "\n</agent_data>\n"
 
 
 def write_xml(outdir, agent, xml_text):
@@ -421,6 +467,9 @@ def main():
     success = 0
     failed = 0
     query_count = 0
+    errors = []
+    fatal_error = False
+    database_version = ""
 
     # Always report one connection/session collector indicator.
     try:
@@ -461,15 +510,20 @@ def main():
         with conn.cursor() as cursor:
             # Small identity query using the same session.
             try:
-                cursor.execute("SELECT current_database(), current_user, version()")
+                cursor.execute("SELECT current_database(), current_user, version(), current_setting('server_version')")
                 row = cursor.fetchone()
                 query_count += 1
                 if row:
+                    # Preserve DB identity in Pandora Agent Version. This
+                    # query already runs in the active monitoring session.
+                    database_version = format_product_identity(row[2], row[3])
                     modules.append(module_xml(prefix + "PostgreSQL:CurrentDatabase", row[0], "generic_data_string", group="PostgreSQL Collector"))
                     modules.append(module_xml(prefix + "PostgreSQL:MonitoringUser", row[1], "generic_data_string", group="PostgreSQL Collector"))
             except Exception as e:
                 failed += 1
-                log_line(run_log, "WARNING", f"Identity query failed: {e}")
+                msg = diagnostic(e, password)
+                errors.append(f"[Identity] {msg}")
+                log_line(run_log, "WARNING", f"Identity query failed: {msg}")
 
             # Built-in modules, using one cursor/session for all queries.
             builtins = json.loads(BUILTIN_FILE.read_text(encoding="utf-8"))
@@ -481,6 +535,7 @@ def main():
                 sql = replace_macros(item.get("query", ""), cfg)
                 if not select_only(sql):
                     failed += 1
+                    errors.append(f"[{mod_name}] Rejected: query must start with SELECT/WITH.")
                     log_line(run_log, "WARNING", f"Built-in query rejected (not SELECT/WITH): {mod_name}")
                     continue
                 try:
@@ -499,7 +554,9 @@ def main():
                     success += 1
                 except Exception as e:
                     failed += 1
-                    log_line(run_log, "WARNING", f"Built-in query failed [{mod_name}]: {e}")
+                    msg = diagnostic(e, password)
+                    errors.append(f"[{mod_name}] {msg}")
+                    log_line(run_log, "WARNING", f"Built-in query failed [{mod_name}]: {msg}")
 
             # Custom SQL modules defined directly in the Discovery UI.
             if parse_bool(cfg.get("custom_enabled"), False):
@@ -515,10 +572,12 @@ def main():
                     sql = replace_macros(item.get("target") or item.get("sql", ""), cfg)
                     if not name or not sql:
                         failed += 1
+                        errors.append(f"[Custom #{idx}] Missing name or SQL target.")
                         log_line(run_log, "WARNING", f"Custom query #{idx} missing name or target")
                         continue
                     if not select_only(sql):
                         failed += 1
+                        errors.append(f"[{name}] Rejected: only SELECT/WITH query is accepted.")
                         log_line(run_log, "WARNING", f"Custom query rejected (only SELECT/WITH allowed): {name}")
                         continue
                     datatype = item.get("datatype", item.get("type", "generic_data")) or "generic_data"
@@ -539,7 +598,9 @@ def main():
                         success += 1
                     except Exception as e:
                         failed += 1
-                        log_line(run_log, "WARNING", f"Custom query failed [{name}]: {e}")
+                        msg = diagnostic(e, password)
+                        errors.append(f"[{name}] {msg}")
+                        log_line(run_log, "WARNING", f"Custom query failed [{name}]: {msg}")
 
         duration_ms = int((time.time() - started) * 1000)
         modules.append(module_xml(prefix + "PostgreSQL:CollectorQueries", query_count, "generic_data", unit="queries", group="PostgreSQL Collector"))
@@ -548,10 +609,12 @@ def main():
 
     except Exception as e:
         failed += 1
-        errmsg = str(e)
+        fatal_error = True
+        errmsg = diagnostic(e, password)
+        errors.append(errmsg)
         log_line(run_log, "ERROR", f"Connection/collector failure host={host}:{port} db={database}: {errmsg}")
+        # Keep numeric Connection=0 for alerts; error text belongs in Task Summary.
         modules.append(module_xml(prefix + "PostgreSQL:Connection", 0, "generic_proc", group="PostgreSQL Collector", cfg={"min_critical": 0, "max_critical": 0}))
-        modules.append(module_xml(prefix + "PostgreSQL:ConnectionError", errmsg[:1500], "generic_data_string", group="PostgreSQL Collector"))
         modules.append(module_xml(prefix + "PostgreSQL:CollectorSessions", 0, "generic_data", unit="session", group="PostgreSQL Collector"))
     finally:
         try:
@@ -560,7 +623,7 @@ def main():
         except Exception:
             pass
 
-    xml_text = write_agent_xml(agent, group, host, modules)
+    xml_text = write_agent_xml(agent, group, host, modules, database_version)
     if args.stdout:
         print(xml_text)
         output_path = "stdout"
@@ -568,19 +631,30 @@ def main():
         output_path = write_xml(args.outdir, agent, xml_text)
 
     log_line(run_log, "INFO", f"Finish agent={agent}; success={success} failed={failed} SQL={query_count} sessions<=1 output={output_path}")
+    status = "FAILED" if fatal_error else ("PARTIAL" if failed else "OK")
+    summary = {
+        "Status": status,
+        "Agent": agent,
+        "DB": "PostgreSQL",
+        "Database version": database_version or "Unavailable",
+        "Target": f"{host}:{port}/{database}",
+        "SQL queries": query_count,
+        "Modules OK": success,
+        "Errors": failed,
+        "DB sessions used": 1 if conn is not None else 0,
+        "Output": output_path,
+    }
+    for idx, detail in enumerate(errors[:5], 1):
+        summary[f"Error {idx}"] = detail[:450]
+    if len(errors) > 5:
+        summary["Additional errors"] = f"{len(errors)-5} more; inspect collector log"
+    if errors:
+        summary["Suggested action"] = error_advice(errors[0]) if fatal_error else "Inspect failed queries and SELECT permissions; healthy modules were still collected."
     print(json.dumps({
-        "summary": {
-            "Agent": agent,
-            "Target": f"{host}:{port}/{database}",
-            "SQL queries": query_count,
-            "Modules OK": success,
-            "Errors": failed,
-            "DB sessions used": 1 if conn is not None else 0,
-            "Output": output_path,
-        },
-        "info": "PostgreSQL monitoring data generated using one reusable database session."
+        "summary": summary,
+        "info": "One PostgreSQL DB session per execution maximum; errors are shown here, not as text monitoring modules."
     }, ensure_ascii=False))
-    return 0
+    return 1 if fatal_error else 0
 
 
 if __name__ == "__main__":
