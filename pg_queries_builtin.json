@@ -1,0 +1,156 @@
+{
+    "postgres_uptime_days": {
+        "query": "SELECT EXTRACT(EPOCH FROM (now() - pg_postmaster_start_time()))/86400",
+        "type": "async_data",
+        "desc": "PostgreSQL - Uptime (Days)",
+        "unit": "days",
+        "module_group": "Basic Info"
+    },
+    "psql_version": {
+        "query": "SELECT version()",
+        "type": "async_string",
+        "desc": "PostgreSQL version",
+        "unit": "",
+        "module_group": "Basic Info"
+    },
+    "list_database": {
+        "query": "SELECT datname FROM pg_database",
+        "type": "async_string",
+        "desc": "List Database Names",
+        "unit": "",
+        "module_group": "Basic Info"
+    },
+    "count_databases": {
+        "query": "SELECT count(*) FROM pg_database",
+        "type": "async_data",
+        "desc": "Count Total Databases in PostgreSQL",
+        "unit": "",
+        "module_group": "Basic Info"
+    },
+    "check_index_size": {
+        "query": "SELECT schemaname, relname AS table_name, pg_size_pretty(pg_table_size(relid)) AS table_size, pg_size_pretty(pg_indexes_size(relid)) AS index_size, pg_size_pretty(pg_total_relation_size(relid)) AS total_size FROM pg_catalog.pg_statio_user_tables ORDER BY pg_total_relation_size(relid) DESC",
+        "type": "async_string",
+        "desc": "Check Index Size",
+        "unit": "",
+        "module_group": "Performance"
+    },
+    "PG_Max_Connections_Allowed": {
+        "query": "SELECT current_setting('max_connections')::integer",
+        "type": "async_data",
+        "desc": "Maximum connections configured in postgresql.conf",
+        "unit": "",
+        "module_group": "Connections"
+    },
+    "total_connections": {
+        "query": "SELECT count(*) FROM pg_stat_activity",
+        "type": "async_data",
+        "desc": "Total Number of Connections or running backends",
+        "unit": "",
+        "module_group": "Connections"
+    },
+    "PG_Active_Connections": {
+        "query": "SELECT count(*) FROM pg_stat_activity WHERE state = 'active'",
+        "type": "async_data",
+        "desc": "Total active queries/connections",
+        "unit": "",
+        "module_group": "Connections"
+    },
+    "count_connection_idle": {
+        "query": "SELECT count(*) FROM pg_stat_activity WHERE state ='idle'",
+        "type": "async_data",
+        "desc": "Count Connections Idle in Database",
+        "unit": "",
+        "module_group": "Connections"
+    },
+    "connections_waiting_in_locks": {
+        "query": "SELECT count(*) FROM pg_stat_activity WHERE wait_event = 'Lock'",
+        "type": "async_data",
+        "desc": "Number of connections/backends waiting on locks",
+        "unit": "",
+        "module_group": "Connections"
+    },
+    "connections_idle_in_transaction": {
+        "query": "SELECT count(*) FROM pg_stat_activity WHERE wait_event = 'idle in transaction'",
+        "type": "async_data",
+        "desc": "Number of backends in an idle transaction",
+        "unit": "",
+        "module_group": "Connections"
+    },
+    "database_state": {
+        "query": "SELECT state FROM pg_stat_activity WHERE datname = '{{DBNAME}}'",
+        "type": "async_string",
+        "desc": "Database status for {{DBNAME}}",
+        "unit": "",
+        "module_group": "Connections"
+    },
+    "number_users": {
+        "query": "SELECT COUNT(usename) FROM pg_stat_activity",
+        "type": "async_data",
+        "desc": "Number of users connected in PostgreSQL",
+        "unit": "",
+        "module_group": "Security & Roles"
+    },
+    "number_roles": {
+        "query": "SELECT count(*) FROM pg_roles",
+        "type": "async_data",
+        "desc": "Number of database roles configured",
+        "unit": "",
+        "module_group": "Security & Roles"
+    },
+    "num_blocks": {
+        "query": "SELECT COUNT(*) FROM pg_locks",
+        "type": "async_data",
+        "desc": "Number of active locks/deadlocks",
+        "unit": "",
+        "module_group": "Performance"
+    },
+    "number_commits": {
+        "query": "SELECT sum(xact_commit) FROM (pg_database AS db JOIN pg_stat_database sdb ON db.datname=sdb.datname) WHERE db.datname = '{{DBNAME}}'",
+        "type": "async_data",
+        "desc": "Number of commits in current transaction for {{DBNAME}}",
+        "unit": "",
+        "module_group": "Transactions"
+    },
+    "number_rollbacks": {
+        "query": "SELECT sum(xact_rollback) FROM (pg_database AS db JOIN pg_stat_database sdb ON db.datname=sdb.datname) WHERE db.datname = '{{DBNAME}}'",
+        "type": "async_data",
+        "desc": "Number of rollbacks for {{DBNAME}}",
+        "unit": "",
+        "module_group": "Transactions"
+    },
+    "tuples_returned": {
+        "query": "SELECT sum(tup_returned) FROM (pg_database AS db JOIN pg_stat_database sdb ON db.datname=sdb.datname) WHERE db.datname = '{{DBNAME}}'",
+        "type": "async_data",
+        "desc": "Number of rows returned by queries in {{DBNAME}}",
+        "unit": "",
+        "module_group": "Tuples Statistics"
+    },
+    "tuples_searched": {
+        "query": "SELECT sum(tup_fetched) FROM (pg_database AS db JOIN pg_stat_database sdb ON db.datname=sdb.datname) WHERE db.datname = '{{DBNAME}}'",
+        "type": "async_data",
+        "desc": "Number of tuples searched in {{DBNAME}}",
+        "unit": "",
+        "module_group": "Tuples Statistics"
+    },
+    "tuples_inserted": {
+        "query": "SELECT sum(tup_inserted) FROM (pg_database AS db JOIN pg_stat_database sdb ON db.datname=sdb.datname) WHERE db.datname = '{{DBNAME}}'",
+        "type": "async_data",
+        "desc": "Number of rows inserted into {{DBNAME}}",
+        "unit": "",
+        "module_group": "Tuples Statistics"
+    },
+    "tuples_updated": {
+        "query": "SELECT sum(tup_updated) FROM (pg_database AS db JOIN pg_stat_database sdb ON db.datname=sdb.datname) WHERE db.datname = '{{DBNAME}}'",
+        "type": "async_data",
+        "desc": "Number of tuples updated in {{DBNAME}}",
+        "unit": "",
+        "module_group": "Tuples Statistics"
+    },
+    "tuples_removed": {
+        "query": "SELECT sum(tup_deleted) FROM (pg_database AS db JOIN pg_stat_database sdb ON db.datname=sdb.datname) WHERE db.datname = '{{DBNAME}}'",
+        "type": "async_data",
+        "desc": "Number of tuples removed in {{DBNAME}}",
+        "unit": "",
+        "module_group": "Tuples Statistics"
+    }
+}
