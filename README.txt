@@ -1,185 +1,225 @@
-Pandora FMS PostgreSQL Query Monitoring Discovery
-=================================================
-Version: 1.1.3
-Short name: pandorafms.postgresql_monitor
+# PostgreSQL Monitoring for Pandora FMS
 
-Purpose
--------
-This package converts the supplied PostgreSQL XML querier into a Pandora FMS
-Discovery application. The built-in module catalogue comes from pg_queries.json,
-but new SQL modules are added from the Discovery task UI instead of editing a
-JSON file on the server.
+> **Version:** 1.1.3  
+> **Platform:** Pandora FMS Discovery (Application)  
+> **Package:** `pandorafms.postgresql_monitor.disco`  
+> **Status:** Community-maintained integration; test on your target versions before production use.
 
-Session design
---------------
-Each task execution opens ONE PostgreSQL connection and reuses ONE cursor for
-all enabled built-in and custom SQL modules. The connection is closed when the
-run finishes. A non-blocking lock prevents two runs of the same Discovery task
-from overlapping, avoiding session pile-up if a previous run is still active.
+## Overview
 
-The session is configured read-only and uses:
-- connect_timeout
-- statement_timeout
-- lock_timeout
-- idle_in_transaction_session_timeout
-- application_name=PandoraFMS-PostgreSQL-Discovery
+A community-developed Pandora FMS Discovery application for remotely monitoring PostgreSQL using built-in health/performance metrics and SQL modules configured through the Discovery wizard.
 
-Requirements
-------------
-Python 3 and psycopg2 on the Pandora Discovery server.
-Examples for RHEL/Rocky/Alma depend on the enabled repository, commonly:
-  dnf install python3-psycopg2
-or use the same Python environment where the original pg_querier.py already
-works.
+This repository contains a **Pandora FMS Discovery application**, not a PostgreSQL installation and not a standalone Pandora agent. Monitoring runs remotely from the Pandora Discovery server and generates XML data modules ingested by Pandora FMS.
 
-Custom modules from UI
-----------------------
-Step 3 uses separate fields for each custom SQL module:
+## Features
 
-Previous versions supported a text-only bulk format:
+- **22 built-in SQL monitoring modules**, organized by group and individually enabled/disabled at group level.
+- Up to **10 user-defined SQL modules per Discovery task**, entered via separate UI fields (name, type, unit, group, result mode and multiline query).
+- Numeric and text modules, including a **readable multi-row/multi-column table** for Pandora snapshot views.
+- Collector self-monitoring (connection status, query/error counters and collection time).
+- **At most one database connection per execution**, with sequential SQL execution and per-task local overlap locking.
+- Single-statement `SELECT`/`WITH` safety checking, query timeout controls, run logs, and per-task configuration supplied by Pandora.
 
-1) Quick format (one module per line):
+## How it works
 
-  NAME|DATATYPE|UNIT|MODULE_GROUP|SELECT QUERY
+```text
+Pandora Console (Discovery task wizard)
+                 |
+       discovery_definition.ini
+                 |
+        Python SQL collector
+                 |
+      1 database connection
+                 |
+        built-in + custom SQL
+                 |
+       Pandora XML .data file
+                 |
+        Pandora Data Server
+                 |
+        Agent / monitoring modules
+```
 
-Example:
+## Requirements
 
-  active_connections|generic_data|connections|Custom SQL|SELECT count(*) FROM pg_stat_activity WHERE state='active';
-  database_size|generic_data|bytes|Custom SQL|SELECT pg_database_size(current_database());
+- **Pandora FMS** with the Discovery Applications feature enabled (developed against the Pandora FMS 8.0NG.805 workflow; other versions not guaranteed).
+- **Linux Pandora Discovery server** with `/usr/bin/python3` (the path invoked by this package).
+- **Python driver:** `psycopg2` (Psycopg 2).
+- **Database/network:** PostgreSQL TCP access (default `5432`), credentials, and a database name. TLS policy can be configured through the PostgreSQL SSL mode field.
+- Write permission to Pandora incoming directory (provided as `__incomingDir__`) and to the configured run-log location.
+- Linux `flock` support, used to suppress overlapping executions on the **same host/task**.
 
-The SQL part is the remainder after the fourth pipe, so PostgreSQL pipe
-operators can still appear in the SQL.
+### Install and verify the driver
 
-2) Advanced Pandora-style block format:
+`sudo dnf install python3-psycopg2` (when available) or install `psycopg2` into the Python interpreter used by Discovery. For local experimentation, `python3 -m pip install psycopg2-binary` is convenient; review upstream guidance before choosing it for production.
 
-  check_begin
-  name long_running_queries
-  description Active queries older than 60 seconds
-  operation value
-  datatype generic_data
-  unit queries
-  module_group Custom SQL
-  min_warning 1
-  min_critical 5
-  target SELECT count(*) FROM pg_stat_activity WHERE state='active' AND query_start < now() - interval '60 seconds';
-  check_end
+```bash
+/usr/bin/python3 -c "import psycopg2; print(psycopg2.__version__)"
+```
 
-Supported block keys:
-  name                 required
-  target / sql         required
-  description
-  operation            value | full
-  datatype             generic_data | generic_data_string | generic_proc
-  unit
-  module_group
-  min_warning
-  max_warning
-  min_critical
-  max_critical
-  str_warning
-  str_critical
-  warning_inverse
-  critical_inverse
-  module_interval
+**Important:** Installing a driver into a virtual environment or `root` user environment does not automatically make it available to the system Python executable `/usr/bin/python3` or the service account running Discovery. Match the interpreter, package location, and filesystem permissions.
 
-Only SELECT/WITH statements are accepted, and the PostgreSQL session itself is
-read-only for an additional safety layer.
+## Installation in Pandora FMS
 
-Macros available in built-in/custom SQL:
-  {{DBNAME}} or $__self_dbname
-  {{HOST}}
-  {{PORT}}
-  {{USER}}
+1. Obtain `pandorafms.postgresql_monitor.disco` from this repository or its GitHub Releases.
+2. In Pandora FMS Console, open **Management → Discovery → Applications / Manage DISCO packages** (exact menu label may differ by build).
+3. Select **Load/Upload DISCO** and upload the `.disco` file. Do **not** extract the archive before uploading.
+4. Create a Discovery **Application** task for this extension, select the Discovery server and an execution interval (start with **300 seconds**).
+5. Fill in the target host, port, database/service name, monitoring username/password and Pandora agent/group.
+6. Enable the desired built-in groups and optionally create custom SQL modules; save the task.
+7. Run the task, then check **Discovery Task execution summary**, resulting Pandora agent/modules and collection log.
 
-Password substitution is intentionally not supported in SQL.
+The `.disco` file is a ZIP-format archive with a `.disco` extension. `discovery_definition.ini` must be located at the **archive root**.
 
-Built-in groups
----------------
-Basic Info
-Connections
-Performance
-Security & Roles
-Transactions
-Tuples Statistics
+## Configuration
 
-The supplied pg_queries.json is bundled as pg_queries_builtin.json. Each group
-can be enabled/disabled from the Discovery UI.
+| Setting | Purpose |
+|---|---|
+| Target host / port | Database endpoint reachable from Pandora Discovery server |
+| Database / service | Database to connect to (Oracle uses a **service name**) |
+| Monitoring credentials | Dedicated low-privilege database account |
+| Agent name and group | Agent grouping in Pandora FMS |
+| Built-in groups | Select which predefined metrics to collect |
+| Custom SQL modules | Add up to ten custom monitoring modules |
+| Result mode | `Auto`, `Table`, or `Scalar` for custom query output |
+| Timeouts and overlap protection | Limit query runtime and duplicate task runs |
 
-Collector self-monitoring modules
----------------------------------
-PostgreSQL:Connection
-PostgreSQL:CollectorSessions
-PostgreSQL:CollectorQueries
-PostgreSQL:CollectorQueryErrors
-PostgreSQL:CollectionTime
-PostgreSQL:CurrentDatabase
-PostgreSQL:MonitoringUser
+**PostgreSQL defaults:** database `postgres`, TCP `5432`, and `application_name=PandoraFMS-PostgreSQL-Discovery` for identifying active collector connections.
 
-A failed database connection still writes XML with Connection=0 and the error
-text, so Pandora can show the outage instead of simply receiving no data.
+## Built-in monitoring
 
-Manual test
------------
-Pandora creates the config and ten individual SQL temporary files through
-[tempfile_confs]; no need to write pg_queries.json for custom modules.
-The real Discovery command automatically supplies --sql-files with ten paths.
-For standalone testing call the Python script with --config and --sql-files
-(ten paths, one per textarea). The output can be inspected with --stdout.
+The bundled SQL catalog contains **22 modules**. Available monitoring groups: **Basic Info; Connections; Performance; Security & Roles; Transactions; Tuples Statistics**. Examples include:
 
-Diagnostic query:
-  grep -iE "Custom query|failed|SyntaxError|error" \
-    /var/log/pandora-scan/postgresql_discovery.run.log | tail -30
+- uptime, version, databases, active/idle connections, locks, transactions, table/index sizes and tuple statistics.
+- `list_database` and `check_index_size` can produce multi-row text tables; use a string module for new custom tabular metrics.
 
+Some built-in metrics require additional privileges or may differ by database edition/version. An individual query error is logged; it does not necessarily indicate a failed network connection.
 
+## Adding custom SQL modules
 
-UI v1.1.1 - FIELD-BASED CUSTOM MODULES
----------------------------------------
-The custom SQL textarea bulk format has been replaced in the Discovery UI by up to 10 progressive module slots.
-Enable custom SQL modules, then enable Module 1. Each enabled module has separate fields for Name, Datatype, Unit, Module Group and SQL Query.
-Enabling a module reveals the checkbox for the next module, approximating an Add Module workflow while remaining compatible with the standard Pandora FMS .disco form field system.
+In the Discovery task wizard, open **Custom SQL modules**, enable the feature, and enter a module in the field-based form. Enable the next module slot when needed.
 
-Pandora FMS .disco does not document a dynamic repeater/add-row field type; standard supported fields are string, number, password, textarea, checkbox, select, multiselect and tree. Therefore this package uses progressive optional slots instead of modifying Pandora Console PHP/JavaScript.
+| Field | Example |
+|---|---|
+| Name | `Active Connections` |
+| Datatype | `generic_data` for numeric or `generic_data_string` / `async_string` for text |
+| Result mode | `Auto` (single-cell scalar; multiple rows/columns become table), `Table`, or `Scalar` |
+| Unit | `connections`, `bytes`, `%`, `ms`, etc. |
+| Module group | `Custom SQL` |
+| SQL query | Read-only `SELECT` or `WITH` query |
 
+### Numeric module example
 
-UI v1.1.1:
-- Custom SQL step uses a single-column layout for tighter spacing.
-- Module 1 no longer needs a separate Add module 1 toggle; enabling Custom SQL directly shows Module 1.
-- Additional modules remain progressive using Add another custom module toggles.
+```sql
+SELECT count(*) FROM pg_stat_activity WHERE state = 'active';
+```
 
+### String module example
 
-Version 1.1.2 - custom query result fix
-----------------------------------------
-- Custom query Result mode added: Auto / Table / Scalar.
-- Auto converts any multi-row or multi-column result to generic_data_string.
-- String module data is emitted as CDATA and XML 1.0-invalid control characters are removed.
-- This specifically supports list queries such as SELECT ... FROM pg_stat_activity.
-- Existing Pandora modules created with an older datatype may need to be deleted/recreated once after upgrading.
+```sql
+SELECT version();
+```
 
-Version 1.1.3 - multiline custom SQL and existing module compatibility
------------------------------------------------------------------------
-Root cause identified in v1.1.2: temporary key=value config included a raw
-multiline SQL textarea. The collector parsed only the first SQL line, such as
-"SELECT", resulting in a PostgreSQL syntax error and unchanged/N/A Pandora data.
+### Tabular / snapshot module example
 
-Fix:
-- Each UI custom SQL query is now stored in its OWN Pandora temporary file.
-- The Python collector reads the full file including newlines and operators (=).
-- The ordinary temporary config only stores scalar fields, not multiline SQL.
-- Auto/Table result modes format multirow data as a readable ASCII table.
-- Existing async_string datatype is preserved; a text module is not silently
-  switched to generic_data_string when its SELECT returns multiple rows.
-- One PostgreSQL connection per execution; built-ins and custom queries share it.
-- SQL text included in pg_stat_activity.query may expose application literals:
-  use a suitably privileged monitoring role and restrict module visibility.
+```sql
+SELECT pid, datname, usename, state
+FROM pg_stat_activity
+WHERE backend_type = 'client backend'
+ORDER BY backend_start DESC
+LIMIT 20;
+```
 
-Upgrade from 1.1.2:
-- Upload v1.1.3 to replace the existing Discovery package.
-- Edit the existing Discovery task and SAVE it again so temporary macros and
-  the execution definition are regenerated from the new package.
-- For List Connections choose async_string (or generic_data_string if creating
-  a new module), Result Mode = Auto or Table, and the multiline SELECT query.
-- For a non-destructive test give the module a NEW name, e.g. List Connections v113.
-- Force-run Discovery, then check module data and collector log.
-- If the new module works but the old one remains N/A, the old module type or
-  historic data could be incompatible; delete/recreate ONLY the affected module
-  after confirming the new one works. Do not delete the whole agent.
+For a multi-row result select a **string datatype** and **Table** mode. Custom SQL text can span multiple lines; each SQL textarea is materialized into its own Pandora temporary file to avoid truncation of multiline queries. Table output is intentionally bounded by a configurable maximum row count and may be truncated for large results.
+
+**Query safety:** This extension applies a conservative read-only SQL syntax filter; this is **not a security boundary**. Always use read-only database permissions and avoid expensive full-table scans in frequent polling.
+
+## Database permissions and security
+
+Create a dedicated role with `LOGIN`, `CONNECT` to the monitored database and only required read privileges. If views hide session/statistics details, grant `pg_read_all_stats` or `pg_monitor` only after evaluating the exposure; neither role is needed for every metric. The collector sets `application_name=PandoraFMS-PostgreSQL-Discovery` by default.
+
+- Restrict access to database port(s) from the Pandora Discovery server only.
+- Prefer encrypted and certificate-verified transport when supported; do not store credentials in Git, public logs or screenshots.
+- Pandora writes sensitive temporary configuration files during execution. Protect the Pandora host, task permissions and temporary-file directories.
+- Monitoring metrics that include session SQL text may expose application literals; review access to Pandora modules and logs.
+
+## Database session usage
+
+The collector uses **one `psycopg2.connect()` and one cursor** for all enabled built-ins and custom queries in a single task execution, then closes the connection. It configures read-only transactions and connection/statement/lock/idle-in-transaction timeouts.
+
+The non-blocking lock prevents **overlapping runs of the same task on one Discovery host**. It is **not a distributed lock**: multiple tasks, different Pandora servers, or external monitoring clients can still create additional database sessions. Tune interval and timeouts according to query cost.
+
+### Inspect collector sessions on the database
+
+```sql
+SELECT pid, application_name, state, client_addr
+FROM pg_stat_activity
+WHERE application_name = 'PandoraFMS-PostgreSQL-Discovery';
+```
+
+## Troubleshooting
+
+- **Dependency error:** run the driver verification command above using `/usr/bin/python3` on the selected Discovery server.
+- **Connection timeout/refused:** check DNS/IP, TCP port, listener/bind address, firewall, DB authentication, and TLS configuration.
+- **Permission denied / missing view:** inspect the failing SQL module and grant only the minimum needed database permissions.
+- **`N/A` on a table module:** select `Table` with a text datatype and test with a **new module name**, since Pandora may preserve the existing module type. Also inspect task execution and SQL errors.
+- **Query result empty:** confirm the query produces rows under the same DB user and database context.
+- **Task unexpectedly skipped:** check whether another run holds the local task lock.
+
+**Default run log:** ``/var/log/pandora-scan/postgresql_discovery.run.log``.
+
+```bash
+tail -100 /var/log/pandora-scan/postgresql_discovery.run.log
+```
+
+## Source files and packaging
+
+The published `.disco` archive contains:
+
+```text
+pandorafms.postgresql_monitor.disco
+├── discovery_definition.ini
+├── pandorafms_postgresql.py
+├── pg_queries_builtin.json
+└── README.txt
+```
+
+To inspect/rebuild from extracted source files (requires `zip` / `unzip`):
+
+```bash
+unzip -l pandorafms.postgresql_monitor.disco
+unzip -t pandorafms.postgresql_monitor.disco
+# From the directory containing the files above:
+zip -j pandorafms.postgresql_monitor.disco discovery_definition.ini pandorafms_postgresql.py pg_queries_builtin.json README.txt
+```
+
+Do not zip a containing parent directory; the `discovery_definition.ini` file must be directly inside the archive. You can use 7-Zip with **ZIP** output and rename `.zip` to `.disco` as well.
+
+## Compatibility and project status
+
+- **Plugin version:** `1.1.3`.
+- Tested at package/parser/syntax level during development; **end-to-end compatibility with every Pandora FMS build or DB engine version is not guaranteed**.
+- Monitoring uses database views/statistics and therefore may differ across versions or privilege sets.
+- This version fixes multiline SQL from Discovery textareas by materializing each custom query into its **own temporary file**. Existing Pandora modules retain their originally registered data type: test with a new module name when changing numeric versus string output.
+
+## Contributing
+
+Contributions are welcome for additional built-in metrics, query optimization, version compatibility, tests, documentation and safe monitoring use cases. Please include database version, Pandora FMS version, reproduction steps and sanitized logs when filing an issue. Do not submit passwords, private IP inventories or database query results containing sensitive values.
+
+## License and trademarks
+
+**License:** No license is included automatically in this README. The repository owner should add an explicit `LICENSE` file before distributing this project as open-source software. The name Pandora FMS and database/vendor names are trademarks of their respective owners. This is an **unofficial, independently developed** integration, not an official Pandora FMS package. Note that Pandora FMS documentation reserves the `pandorafms.` package `short_name` prefix for official integrations; consider a unique community/vendor prefix before public distribution.
+
+## References
+
+- [Pandora FMS: Discovery plugin/package workflow](https://pandorafms.com/manual/!current/en/documentation/pandorafms/monitoring/17_discovery_2)
+
+- [Pandora FMS: .disco development and discovery_definition.ini](https://pandorafms.com/manual/!current/en/documentation/pandorafms/technical_reference/12_disco_development)
+
+- [Pandora FMS: Data XML interface](https://pandorafms.com/manual/!current/en/documentation/pandorafms/technical_reference/01_development_and_extension)
+
+- [Psycopg 2 installation](https://www.psycopg.org/docs/install.html)
+
+- [PostgreSQL monitoring statistics](https://www.postgresql.org/docs/current/monitoring-stats.html)
+
+- [PostgreSQL predefined monitoring roles](https://www.postgresql.org/docs/current/predefined-roles.html)
