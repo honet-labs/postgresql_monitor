@@ -195,6 +195,19 @@ zip -j pandorafms.postgresql_monitor.disco discovery_definition.ini pandorafms_p
 
 Do not zip a containing parent directory; the `discovery_definition.ini` file must be directly inside the archive. You can use 7-Zip with **ZIP** output and rename `.zip` to `.disco` as well.
 
+## Screenshot 
+### Discovery
+<img width="1717" height="897" alt="image" src="https://github.com/user-attachments/assets/254a526e-3b58-4cbf-bdcb-91923bf671e0" />
+<img width="1714" height="852" alt="image" src="https://github.com/user-attachments/assets/95284087-9221-4e41-890e-52758c601f8a" />
+<img width="1713" height="854" alt="image" src="https://github.com/user-attachments/assets/9932436b-b040-4ecc-9729-6d791b61f2fd" />
+<img width="1710" height="901" alt="image" src="https://github.com/user-attachments/assets/d9d901eb-041d-431b-8e98-03048519a095" />
+<img width="1716" height="905" alt="image" src="https://github.com/user-attachments/assets/d0450720-1cad-4014-9aed-964315f097c0" />
+
+### Modules
+<img width="1627" height="720" alt="image" src="https://github.com/user-attachments/assets/87d96061-ee89-42c6-a918-20f2a583ab99" />
+<img width="1635" height="836" alt="image" src="https://github.com/user-attachments/assets/557ae01c-271a-4454-bbdd-77654e2fe6f9" />
+<img width="1636" height="820" alt="image" src="https://github.com/user-attachments/assets/4c77e72f-eeaa-4aff-9463-befbbeefae4f" />
+
 ## Compatibility and project status
 
 - **Plugin version:** `1.1.3`.
